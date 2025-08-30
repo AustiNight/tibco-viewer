@@ -121,10 +121,11 @@
           </label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optSwim" type="checkbox"> Swimlanes</label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optLinearize" type="checkbox"> Linearize (ignore links)</label>
-          <label class="fine" style="margin-right:6px">Sequence:
+          <!-- Repeating nodes control: applies to any frequently appearing containers such as sequence or children -->
+          <label class="fine" style="margin-right:6px">Repeating nodes:
             <select id="optSeqDisplay" class="btn" style="padding:6px 8px">
               <option value="show">Show</option>
-              <option value="annotate" selected>Annotate (#steps)</option>
+              <option value="annotate" selected>Annotate (#items)</option>
               <option value="hide">Hide</option>
             </select>
           </label>
@@ -146,13 +147,60 @@
           <button id="zoomIn">Zoom +</button>
           <button id="zoomOut">Zoom −</button>
           <button id="zoomReset">Fit</button>
+          <!-- Expand/collapse all details in the diagram panel -->
+          <button id="btnToggleDiagramDetails" title="Expand or collapse all details">Expand All</button>
         </div>
       </div>
       <div class="body">
         <div id="mermaid" class="mermaid">graph TD; A[Upload .bwp]-->B{Parse}; B-->C[Summarize]; C-->D[Export Docs];</div>
-        <details style="margin-top:10px">
+        <details id="mermaidSource" style="margin-top:10px">
           <summary>Show Mermaid source</summary>
           <pre id="mermaidSrc" class="mono"></pre>
+        </details>
+
+        <!-- Appearance customization: color pickers and icon selectors for each category -->
+        <details id="appearanceConfig" style="margin-top:12px">
+          <summary class="fine">Customize icons &amp; colors</summary>
+          <div style="margin-top:8px">
+            <p class="fine">Select a color and icon for each activity category. Icons accept emoji or short text labels. These settings apply when <i>Type colors</i> and <i>Icons</i> options are enabled.</p>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:8px">
+              <div>
+                <label class="fine">Service color</label><br/>
+                <input type="color" id="colorService" value="#3b6cff" style="width:100%"/>
+                <input type="text" id="iconService" value="🔧" style="width:100%;margin-top:4px"/>
+              </div>
+              <div>
+                <label class="fine">Transformation color</label><br/>
+                <input type="color" id="colorTransformation" value="#40d19a" style="width:100%"/>
+                <input type="text" id="iconTransformation" value="🔁" style="width:100%;margin-top:4px"/>
+              </div>
+              <div>
+                <label class="fine">Decision color</label><br/>
+                <input type="color" id="colorDecision" value="#ffd166" style="width:100%"/>
+                <input type="text" id="iconDecision" value="❓" style="width:100%;margin-top:4px"/>
+              </div>
+              <div>
+                <label class="fine">Error color</label><br/>
+                <input type="color" id="colorError" value="#ff6b6b" style="width:100%"/>
+                <input type="text" id="iconError" value="⚠️" style="width:100%;margin-top:4px"/>
+              </div>
+              <div>
+                <label class="fine">Loop color</label><br/>
+                <input type="color" id="colorLoop" value="#a084ca" style="width:100%"/>
+                <input type="text" id="iconLoop" value="🔄" style="width:100%;margin-top:4px"/>
+              </div>
+              <div>
+                <label class="fine">Timer color</label><br/>
+                <input type="color" id="colorTimer" value="#9e4770" style="width:100%"/>
+                <input type="text" id="iconTimer" value="⏲" style="width:100%;margin-top:4px"/>
+              </div>
+              <div>
+                <label class="fine">Other color</label><br/>
+                <input type="color" id="colorOther" value="#5b6988" style="width:100%"/>
+                <input type="text" id="iconOther" value="⚙️" style="width:100%;margin-top:4px"/>
+              </div>
+            </div>
+          </div>
         </details>
       </div>
     </div>
@@ -171,7 +219,13 @@
       </div>
       <div class="col">
         <div class="panel">
-          <div class="hdr"><h2>Activities & Transitions</h2><span class="fine">Grouped by type with links</span></div>
+          <div class="hdr"><h2>Activities & Transitions</h2>
+            <div class="btns">
+              <span class="fine" style="margin-right:8px">Grouped by type with links</span>
+              <!-- Expand/Collapse all details toggle -->
+              <button id="btnToggleDetails" class="btn" title="Expand or collapse all sections">Collapse All</button>
+            </div>
+          </div>
           <div class="body">
             <div id="activities"></div>
             <div id="details" style="margin-top:12px"></div>
@@ -227,13 +281,7 @@
   // does not break the rest of the application. We disable automatic startOnLoad
   // because we manually invoke mermaid.run() when diagrams are rendered.
   try {
-    mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'loose',
-    maxTextSize: 100000,      // allow bigger diagrams (adjust as needed)
-    theme: 'default',
-    flowchart: { useMaxWidth: true, htmlLabels: true }
-  });
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'dark' });
   } catch (e) {
     console.warn('Mermaid initialization failed', e);
   }
@@ -751,6 +799,23 @@
     applyZoom();
   };
 
+  // Toggle all <details> elements within the diagram panel (#mermaid and its siblings) open or closed.
+  const btnDetails = document.getElementById('btnToggleDiagramDetails');
+  if (btnDetails){
+    btnDetails.onclick = () => {
+      // Select the Mermaid source details (immediately following #mermaid) and the appearance config details
+      const srcDet = document.getElementById('mermaidSource');
+      const appDet = document.getElementById('appearanceConfig');
+      const dets = [];
+      if (srcDet) dets.push(srcDet);
+      if (appDet) dets.push(appDet);
+      if (!dets.length) return;
+      const allOpen = dets.every(d => d.open);
+      dets.forEach(d => { d.open = !allOpen; });
+      btnDetails.textContent = allOpen ? 'Expand All' : 'Collapse All';
+    };
+  }
+
   // update flowchart when options change
   document.getElementById('optDir').onchange = buildFlowDiagram;
   document.getElementById('optSwim').onchange = buildFlowDiagram;
@@ -870,7 +935,7 @@
     const seqDisplay = opts.seqDisplay || 'annotate';
     // Node coloring and icon options
     const useColors = !!opts.colors;
-    const useIcons  = !!opts.icons; // placeholder for future icon support
+    const useIcons  = !!opts.icons;
     const searchTerm = (opts.search || '').toLowerCase();
     const selectedIds = new Set(opts.selected || []);
     const lines = ["flowchart "+dir];
@@ -879,7 +944,10 @@
     const nid = (name) => esc(name||'').replace(/[^a-zA-Z0-9_]/g,'_').slice(0,40) || uuid('N');
     // Reset nodeMap for interactive lookup
     nodeMap = {};
-    // Helper to count descendant activities for sequence containers
+    // Helper to count descendant activities for any container-like node.  This walks
+    // through the DOM tree and counts immediate and nested activities so we can
+    // annotate containers with the number of contained steps.  It memoises
+    // results to avoid repeated work.
     const seqCountCache = new Map();
     function countDescActivities(containerRaw){
       if (!containerRaw) return 0;
@@ -890,15 +958,60 @@
         const n = q.pop();
         for (const ch of Array.from(n.children||[])){
           const ln = (ch.localName||'').toLowerCase();
+          // Count any node that looks like an activity or has a type/activityType attribute
           if (/activity$/.test(ln) || ch.getAttribute?.('type') || ch.getAttribute?.('activityType') || /receive|reply|invoke|assign|throw|rethrow|wait|empty|pick|onmessage|onalarm/.test(ln)){
             count++;
           }
-          // include nested containers
+          // always traverse deeper
           q.push(ch);
         }
       }
       seqCountCache.set(containerRaw, count);
       return count;
+    }
+    // Helper: read user-defined appearance (color and icon) from inputs
+    function getAppearanceFor(cat){
+      const key = cat.charAt(0).toUpperCase() + cat.slice(1);
+      const colInput = document.getElementById('color'+key);
+      const iconInput= document.getElementById('icon'+key);
+      const colorVal = colInput ? colInput.value || '' : '';
+      const iconVal  = iconInput ? iconInput.value || '' : '';
+      return { color: colorVal, icon: iconVal };
+    }
+    // Contrast color for text readability
+    function contrastColor(hex){
+      if (!hex || !/^#?[0-9a-fA-F]{6}$/.test(hex)) return '#ffffff';
+      const h = hex.replace('#','');
+      const r = parseInt(h.substring(0,2),16);
+      const g = parseInt(h.substring(2,4),16);
+      const b = parseInt(h.substring(4,6),16);
+      const yiq = (r*299 + g*587 + b*114) / 1000;
+      return yiq >= 128 ? '#000000' : '#ffffff';
+    }
+    // Dynamic class definitions for categories based on selected colors
+    const dynamicClassDefs = {};
+    if (useColors){
+      // Map human categories to mermaid class keys (defined in categoryClassMap)
+      const catToClass = { service:'svc', transformation:'transf', decision:'dec', error:'err', loop:'loop', timer:'tim', other:'oth' };
+      ['service','transformation','decision','error','loop','timer','other'].forEach(cat => {
+        const ap = getAppearanceFor(cat);
+        if (ap.color){
+          const contrast = contrastColor(ap.color);
+          const classKey = catToClass[cat] || cat;
+          dynamicClassDefs[classKey] = `fill:${ap.color},stroke:${ap.color},color:${contrast}`;
+        }
+      });
+    }
+    // Always define highlight and selected classes
+    dynamicClassDefs['highlight'] = 'stroke:#ffd166,stroke-width:4px';
+    dynamicClassDefs['selected']  = 'stroke:#ffffff,stroke-width:4px';
+
+    // Build a map from raw DOM nodes to activity objects so we can access
+    // input/output variables captured during normalization. This is used to
+    // enrich node labels when the Variables option is enabled.
+    const rawToAct = new Map();
+    if (m && Array.isArray(m.activities)){
+      for (const act of m.activities){ if (act.raw) rawToAct.set(act.raw, act); }
     }
     // Group activities and containers by process
     const byProcActs = new Map();
@@ -978,20 +1091,91 @@
           items.push({ id: nid(`${proc}_${a.id}`), label: `${a.name}\n<small>${a.type}</small>`, type:'activity', raw:a.raw, cat: categorizeType(a.type) });
         }
       }
+      // Prior to rendering, handle repeating nodes (sequences, children, etc.).
+      // Compute counts of items by type/originalType/localName to identify repetitive nodes.
+      const typeCounts = {};
+      for (const itm of items){
+        const raw = itm.raw;
+        // Determine a key based on originalType, localName, or category
+        let key;
+        if (itm.originalType){
+          key = itm.originalType.toLowerCase();
+        } else if (raw && raw.localName){
+          key = raw.localName.toLowerCase();
+        } else if (itm.type){
+          key = String(itm.type).toLowerCase();
+        } else {
+          key = 'unknown';
+        }
+        typeCounts[key] = (typeCounts[key] || 0) + 1;
+      }
+      // Apply hide/annotate behaviour to repeating nodes when seqDisplay != 'show'
+      if (seqDisplay !== 'show'){
+        const pruned = [];
+        for (const itm of items){
+          let key;
+          if (itm.originalType){ key = itm.originalType.toLowerCase(); }
+          else if (itm.raw && itm.raw.localName){ key = itm.raw.localName.toLowerCase(); }
+          else if (itm.type){ key = String(itm.type).toLowerCase(); }
+          else { key = 'unknown'; }
+          const count = typeCounts[key] || 1;
+          // Determine whether this node is considered repetitive (count >1)
+          const isRepeating = count > 1;
+          if (isRepeating){
+            if (seqDisplay === 'hide'){
+              // Skip this item entirely
+              continue;
+            } else if (seqDisplay === 'annotate'){
+              // Annotate the label: for containers (any node with children) use descendant count; otherwise use duplicate count.
+              const parts = itm.label.split('\n');
+              const firstLine = parts[0];
+              // Avoid double annotation if parentheses already present at end of first line
+              if (!/\(\d+\)$/.test(firstLine.trim())){
+                if (itm.raw && itm.raw.children && itm.raw.children.length > 0){
+                  const steps = countDescActivities(itm.raw);
+                  parts[0] = `${firstLine} (${steps})`;
+                } else {
+                  parts[0] = `${firstLine} (${count})`;
+                }
+                itm.label = parts.join('\n');
+              }
+            }
+          }
+          pruned.push(itm);
+        }
+        items.length = 0;
+        items.push(...pruned);
+      }
+
       // Start process subgraph if swimlanes
       if (swim) lines.push(`subgraph ${procId}[${esc(proc)}]`);
       // Render items
       for (const it of items){
         // NodeMap mapping for interactive details
         nodeMap[it.id] = it;
-        // Build node label with optional service and variable info
+        // Build node label with optional service, variables, icons
         let lbl = `${it.label}`;
+        // Prepend icon to the first line if icons are enabled
+        if (useIcons){
+          const ap = getAppearanceFor(it.cat || 'other');
+          const ic = (ap && ap.icon) ? ap.icon.trim() : '';
+          if (ic){
+            const parts = lbl.split('\n');
+            parts[0] = `${ic} ${parts[0]}`;
+            lbl = parts.join('\n');
+          }
+        }
+        // Append service info and variables if requested
         if (it.raw && (showService || showVars)){
           const a = it.raw;
+          const actObj = rawToAct.get(a) || null;
           const pl = a.getAttribute && (a.getAttribute('partnerLink') || a.getAttribute('partnerlink') || '');
           const op = a.getAttribute && a.getAttribute('operation');
-          const inV = a.getAttribute && (a.getAttribute('inputVariable') || a.getAttribute('inputvariable') || a.getAttribute('variable'));
-          const outV= a.getAttribute && (a.getAttribute('outputVariable') || a.getAttribute('outputvariable'));
+          // Prefer normalized inputVar/outputVar if available; fallback to raw attributes
+          let inV  = actObj && actObj.inputVar || '';
+          let outV = actObj && actObj.outputVar || '';
+          if (!inV)  inV  = a.getAttribute && (a.getAttribute('inputVariable') || a.getAttribute('inputvariable') || a.getAttribute('variable'));
+          if (!outV) outV = a.getAttribute && (a.getAttribute('outputVariable') || a.getAttribute('outputvariable'));
           const extras = [];
           if (showService && (pl || op)){
             const svc = `${pl || ''}${pl && op ? ' ' : ''}${op || ''}`.trim(); if (svc) extras.push(svc);
@@ -1000,9 +1184,10 @@
             const vline = `${inV || ''}${(inV && outV) ? '→' : ''}${outV || ''}`.trim(); if (vline) extras.push(vline);
           }
           if (extras.length){
-            const parts = it.label.split('\n');
-            const last = parts.pop();
-            lbl = `${parts[0]}\n${extras.join('\n')}\n${last}`;
+            const parts = lbl.split('\n');
+            const first = parts.shift();
+            const last = parts.pop() || '';
+            lbl = `${first}\n${extras.join('\n')}\n${last}`;
           }
         }
         // Compose node definition
@@ -1016,9 +1201,9 @@
         if (searchTerm){
           const n = (it.raw?.getAttribute && (it.raw.getAttribute('name') || it.raw.getAttribute('label')) || it.label || '').toLowerCase();
           const t = (it.raw?.getAttribute && (it.raw.getAttribute('type') || it.raw.getAttribute('activityType')) || it.type || '').toLowerCase();
-          const pl = it.raw?.getAttribute && (it.raw.getAttribute('partnerLink') || it.raw.getAttribute('partnerlink')) || '';
+          const plx = it.raw?.getAttribute && (it.raw.getAttribute('partnerLink') || it.raw.getAttribute('partnerlink')) || '';
           const op2 = it.raw?.getAttribute && it.raw.getAttribute('operation') || '';
-          const combined = `${n} ${t} ${pl} ${op2}`;
+          const combined = `${n} ${t} ${plx} ${op2}`;
           if (combined.includes(searchTerm)){
             assignLines.push(`class ${it.id} highlight`);
           }
@@ -1055,9 +1240,9 @@
     }
     // Append class definitions and assignments if needed
     if (useColors || searchTerm || selectedIds.size){
-      // class definitions
-      for (const key in classDefs){
-        classLines.push(`classDef ${key} ${classDefs[key]}`);
+      // dynamic class definitions based on selected colors
+      for (const key in dynamicClassDefs){
+        classLines.push(`classDef ${key} ${dynamicClassDefs[key]}`);
       }
     }
     const output = lines.concat(classLines, assignLines);
@@ -1104,6 +1289,20 @@
   document.getElementById('btnDataFlow').onclick = buildDataFlowDiagram;
   document.getElementById('btnExportPNG').onclick = exportPNG;
   document.getElementById('btnExportPDF').onclick = exportPDF;
+
+  // Expand/Collapse all sections in the Activities list
+  const btnToggle = document.getElementById('btnToggleDetails');
+  if (btnToggle){
+    btnToggle.onclick = ()=>{
+      const detailEls = document.querySelectorAll('#activities details');
+      if (!detailEls || detailEls.length===0) return;
+      // Determine if all are currently open
+      const allOpen = Array.from(detailEls).every(d=>d.open);
+      detailEls.forEach(d=>{ d.open = !allOpen; });
+      // Update button label
+      btnToggle.textContent = allOpen ? 'Expand All' : 'Collapse All';
+    };
+  }
 
   function exportMarkdown(){
     const m = state.model; if (!m) return;
@@ -1332,71 +1531,99 @@
   // --- Narrative generation ---
   // Build a simple natural-language narrative describing the workflow at the current level
   function generateNarrative(m, opts = {}){
+    // Produce a human‑readable description of each process. Focus on the
+    // high‑level structure rather than listing every step. Summarise sequences
+    // and flows by naming their immediate children and report standalone
+    // activities. Avoid enumerating too many names; if more than four children,
+    // mention the count instead.  If no processes exist, return a message.
     if (!m || !m.processes || !m.processes.length) return 'No process detected.';
-    const showService = opts.showService !== false;
-    const showVars = !!opts.showVars;
-    // Collect narrative per process
-    const parts = [];
+    const paragraphs = [];
     for (const p of m.processes){
-      const name = p.name || 'process';
-      // Gather top-level items (containers and activities at depth 0)
+      const procName = p.name || 'process';
+      // Collect top-level containers and activities for this process
+      const topContainers = (m.containers || []).filter(c => (c.parentProcess || null) === p.name && (c.depth || 0) === 0);
+      const topActivities = (m.activities || []).filter(a => (a.parentProcess || null) === p.name && ((a.containerDepth || 0) === 0));
+      // To preserve ordering, combine containers and activities by their document position
       const items = [];
-      for (const c of (m.containers||[])){
-        if ((c.parentProcess||null)===p.name && (c.depth||0)===0){ items.push({raw:c.raw, type:'container', name:c.name, kind:c.type}); }
-      }
-      for (const a of (m.activities||[])){
-        if ((a.parentProcess||null)===p.name && (a.containerDepth||0)===0){ items.push({raw:a.raw, type:'activity', name:a.name, kind:a.type}); }
-      }
-      // Sort by document order where possible
-      items.sort((a,b)=>{
-        if (a.raw && b.raw && a.raw.compareDocumentPosition){
-          const cmp = a.raw.compareDocumentPosition(b.raw);
+      // Use raw nodes to compute ordering
+      for (const c of topContainers){ items.push({ kind:'container', obj:c, raw:c.raw }); }
+      for (const a of topActivities){ items.push({ kind:'activity', obj:a, raw:a.raw }); }
+      // Sort by document order if possible
+      items.sort((x,y) => {
+        const xr = x.raw, yr = y.raw;
+        if (xr && yr && xr.compareDocumentPosition){
+          const cmp = xr.compareDocumentPosition(yr);
           if (cmp & 2) return 1;
           if (cmp & 4) return -1;
         }
         return 0;
       });
-      if (!items.length){
-        parts.push(`The process "${esc(name)}" contains no visible top‑level containers or activities.`);
-        continue;
-      }
-      // Build step descriptions
-      const stepDescs = [];
-      for (const it of items){
-        if (it.type==='container'){
-          // Describe container generically
-          stepDescs.push(`enter the ${esc(it.kind)} container "${esc(it.name)}"`);
-        } else {
-          // Activity
-          let desc = `perform the ${esc(it.kind)} activity "${esc(it.name)}"`;
-          // Try to include service info and variables from DOM attributes
-          if (it.raw){
-            const pl = it.raw.getAttribute && (it.raw.getAttribute('partnerLink') || it.raw.getAttribute('partnerlink') || '');
-            const op = it.raw.getAttribute && (it.raw.getAttribute('operation') || '');
-            const inV = it.raw.getAttribute && (it.raw.getAttribute('inputVariable') || it.raw.getAttribute('inputvariable') || it.raw.getAttribute('variable'));
-            const outV = it.raw.getAttribute && (it.raw.getAttribute('outputVariable') || it.raw.getAttribute('outputvariable'));
-            if (showService && (pl || op)){
-              const svc = `${pl || ''}${pl && op ? ' ' : ''}${op || ''}`.trim();
-              if (svc) desc += ` that calls service ${esc(svc)}`;
+      const phrases = [];
+      for (const [idx, item] of items.entries()){
+        if (item.kind === 'container'){
+          const c = item.obj;
+          const type = (c.type || '').toLowerCase();
+          // immediate children under this container
+          const children = (m.activities || []).filter(a => (a.parentProcess || null) === p.name && a.parentScope === c.name);
+          const names = children.map(a => a.name).filter(Boolean);
+          // Build description based on container type
+          let desc = '';
+          if (type === 'sequence'){
+            if (names.length === 0){
+              desc = `a sequence (${c.name})`;
+            } else if (names.length <= 4){
+              desc = `a sequence with ${names.length} step${names.length > 1 ? 's' : ''}: ${names.join(', ')}`;
+            } else {
+              desc = `a sequence containing ${names.length} activities`;
             }
-            if (showVars && (inV || outV)){
-              const vline = `${inV || ''}${(inV && outV) ? '→' : ''}${outV || ''}`.trim();
-              if (vline) desc += ` using variables ${esc(vline)}`;
+          } else if (type === 'flow'){
+            if (names.length === 0){
+              desc = `a flow (${c.name})`;
+            } else if (names.length <= 4){
+              desc = `a parallel flow branching to ${names.join(', ')}`;
+            } else {
+              desc = `a parallel flow with ${names.length} branches`;
+            }
+          } else if (type === 'scope'){
+            if (names.length){
+              desc = `a scope (${c.name}) containing ${names.join(', ')}`;
+            } else {
+              desc = `a scope named ${c.name}`;
+            }
+          } else {
+            if (names.length){
+              desc = `${type} ${c.name} containing ${names.join(', ')}`;
+            } else {
+              desc = `${type} ${c.name}`;
             }
           }
-          stepDescs.push(desc);
+          phrases.push(desc);
+        } else if (item.kind === 'activity'){
+          const a = item.obj;
+          const t = (a.type || '').toLowerCase();
+          const n = a.name;
+          if (n && t){
+            phrases.push(`the ${t} activity ${n}`);
+          } else if (n){
+            phrases.push(`the activity ${n}`);
+          }
         }
       }
-      // Compose narrative sentence
-      if (stepDescs.length){
-        const sentence = `The process "${esc(name)}" proceeds as follows: ` + stepDescs.map((d,i)=>{
-          if (i===0) return d;
-          return 'then '+d;
-        }).join(', ') + '.';
-        parts.push(sentence);
+      // Compose the narrative sentence for this process
+      if (phrases.length){
+        let sentence = `The process "${esc(procName)}" begins with `;
+        phrases.forEach((ph, i) => {
+          if (i === 0){ sentence += ph; }
+          else if (i === phrases.length - 1){ sentence += ' and ' + ph; }
+          else { sentence += ', ' + ph; }
+        });
+        sentence += '.';
+        paragraphs.push(sentence);
+      } else {
+        paragraphs.push(`The process "${esc(procName)}" contains no top-level activities or containers.`);
       }
     }
-    return parts.join('\n');
+    return paragraphs.join('\n');
   }
 
   function updateNarrative(){
@@ -1435,8 +1662,18 @@
       if (raw){
         const pl = raw.getAttribute && (raw.getAttribute('partnerLink') || raw.getAttribute('partnerlink') || '');
         const op = raw.getAttribute && raw.getAttribute('operation');
-        const inV = raw.getAttribute && (raw.getAttribute('inputVariable') || raw.getAttribute('inputvariable') || raw.getAttribute('variable'));
-        const outV = raw.getAttribute && (raw.getAttribute('outputVariable') || raw.getAttribute('outputvariable'));
+        // Fetch normalized activity for variable names
+        let actObj = null;
+        if (state && state.model && state.model.activities){
+          actObj = state.model.activities.find(a=>a.raw === raw) || null;
+        }
+        let inV  = '';
+        let outV = '';
+        // Prefer normalized inputVar/outputVar values if available
+        if (actObj){ inV = actObj.inputVar || ''; outV = actObj.outputVar || ''; }
+        // Fallback to raw attributes
+        if (!inV)  inV  = raw.getAttribute && (raw.getAttribute('inputVariable') || raw.getAttribute('inputvariable') || raw.getAttribute('variable'));
+        if (!outV) outV = raw.getAttribute && (raw.getAttribute('outputVariable') || raw.getAttribute('outputvariable'));
         if (pl || op) html.push('<p class="fine"><b>Service:</b> '+esc(`${pl}${pl && op ? ' ' : ''}${op}`.trim())+'</p>');
         if (inV || outV) html.push('<p class="fine"><b>Variables:</b> '+esc(`${inV || ''}${(inV && outV) ? '→' : ''}${outV || ''}`.trim())+'</p>');
         const attrs = [];
