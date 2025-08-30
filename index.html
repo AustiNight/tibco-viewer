@@ -56,6 +56,9 @@
   <!-- JSZip + FileSaver for zip handling and downloads -->
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <!-- dom-to-image and jsPDF for exporting diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/dom-to-image@2.6.0/dist/dom-to-image.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 </head>
 <body>
   <div class="wrap">
@@ -73,6 +76,12 @@
               <label class="file"><input id="file" type="file" accept=".bwp,.xml,.zip"/>Choose file</label>
             </div>
             <div id="fileInfo" class="fine" style="margin-top:10px"></div>
+
+            <!-- Additional controls: add file to current analysis and clear analysis -->
+            <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+              <label class="file"><input id="fileAdd" type="file" accept=".bwp,.xml,.zip"/>Add to analysis</label>
+              <button id="btnClearAnalysis" class="danger" style="padding:10px 14px">Clear analysis</button>
+            </div>
           </div>
         </div>
       </div>
@@ -112,10 +121,25 @@
           </label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optSwim" type="checkbox"> Swimlanes</label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optLinearize" type="checkbox"> Linearize (ignore links)</label>
+          <label class="fine" style="margin-right:6px">Sequence:
+            <select id="optSeqDisplay" class="btn" style="padding:6px 8px">
+              <option value="show">Show</option>
+              <option value="annotate" selected>Annotate (#steps)</option>
+              <option value="hide">Hide</option>
+            </select>
+          </label>
           <!-- New toggles for enhanced context -->
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optService" type="checkbox" checked> Service info</label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optVars" type="checkbox"> Variables</label>
           <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optConds" type="checkbox" checked> Edge labels</label>
+
+          <!-- Additional controls for rich diagramming -->
+          <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optColors" type="checkbox"> Type colors</label>
+          <label class="fine" style="display:inline-flex;align-items:center;gap:6px"><input id="optIcons" type="checkbox"> Icons</label>
+          <input id="searchFilter" class="btn" style="padding:6px 8px;width:140px" placeholder="Search…" title="Filter nodes by name, type, or partner link"/>
+          <button id="btnDataFlow">Data Flow</button>
+          <button id="btnExportPNG">Export PNG</button>
+          <button id="btnExportPDF">Export PDF</button>
           <button id="btnFlow" class="primary">Build Flowchart</button>
           <button id="btnSeq">Build Sequence</button>
           <!-- Zoom controls for Mermaid diagram -->
@@ -150,6 +174,7 @@
           <div class="hdr"><h2>Activities & Transitions</h2><span class="fine">Grouped by type with links</span></div>
           <div class="body">
             <div id="activities"></div>
+            <div id="details" style="margin-top:12px"></div>
           </div>
         </div>
       </div>
@@ -167,6 +192,22 @@
     <div class="panel" style="margin-top:16px">
       <div class="hdr"><h2>BPEL Outline</h2><span class="fine">sequence / flow / scope with nested activities</span></div>
       <div class="body" id="outline"></div>
+    </div>
+
+    <!-- Metrics and Best Practices panels -->
+    <div class="row" style="margin-top:16px">
+      <div class="col">
+        <div class="panel">
+          <div class="hdr"><h2>Complexity Metrics</h2><span class="fine">counts, parallelism & depth</span></div>
+          <div class="body" id="metrics" class="fine"></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="panel">
+          <div class="hdr"><h2>Best Practices</h2><span class="fine">warnings & suggestions</span></div>
+          <div class="body" id="bestPractices" class="fine"></div>
+        </div>
+      </div>
     </div>
 
     <footer>
@@ -197,6 +238,13 @@
     model: null, // normalized in-memory representation
     fileName: null,
   };
+
+  // Analysis state: support multiple models when adding files
+  let analysisModels = [];
+  // Map from rendered nodeId to underlying activity/container for detail lookup
+  let nodeMap = {};
+  // Set of currently selected nodeIds for interactive detail view
+  let selectedNodes = new Set();
 
   const el = (id)=>document.getElementById(id);
 
@@ -229,19 +277,48 @@
     if (f) handleFile(f);
   });
 
+  // Additional file controls: add file to existing analysis and clear analysis
+  const fileAdd = document.getElementById('fileAdd');
+  if (fileAdd){
+    fileAdd.addEventListener('change', e=>{
+      const f = e.target.files?.[0];
+      if (f) parseFile(f, true);
+      // reset file input so the same file can be re-selected if desired
+      e.target.value = '';
+    });
+  }
+  const btnClear = document.getElementById('btnClearAnalysis');
+  if (btnClear){
+    btnClear.onclick = ()=>{
+      analysisModels = [];
+      state.xmlDoc = null;
+      state.model = null;
+      state.fileName = null;
+      nodeMap = {};
+      selectedNodes = new Set();
+      // clear displays
+      el('fileInfo').textContent = '';
+      el('summary').innerHTML = '';
+      el('activities').innerHTML = '';
+      el('outline').innerHTML = '';
+      el('narrative').innerText = '';
+      el('mermaid').innerHTML = '';
+      el('mermaidSrc').textContent = '';
+      el('metrics').innerHTML = '';
+      el('bestPractices').innerHTML = '';
+      el('details').innerHTML = '';
+      // reset stats
+      ['sProcesses','sActivities','sTransitions','sInterfaces','sVars','sFaults'].forEach(id=>{
+        const elem = document.getElementById(id);
+        if (elem) elem.textContent = '0';
+      });
+    };
+  }
+
   // --- File handling (XML or ZIP) ---
   async function handleFile(file){
-    state.fileName = file.name;
-    el('fileInfo').textContent = `Selected: ${file.name} (${Math.round(file.size/1024)} KB)`;
-    const buf = await file.arrayBuffer();
-
-    // Try ZIP first if magic header present
-    const isZip = new Uint8Array(buf,0,4).every((b,i)=>[0x50,0x4b,0x03,0x04][i]===b);
-    if (isZip) {
-      try { await parseZip(buf); return; } catch (e){ console.warn('ZIP parse failed, fallback to XML', e); }
-    }
-    // Fallback: assume plain XML
-    await parseXmlText(new TextDecoder().decode(buf));
+    // Deprecated: use parseFile instead for new implementations
+    parseFile(file, false);
   }
 
   async function parseZip(arrayBuffer){
@@ -385,6 +462,100 @@
     function serializeAttrs(node){ const o={}; if (!node?.attributes) return o; for(const a of node.attributes){ o[a.name]=a.value; } return o; }
   }
 
+  // Parse an XML string into a normalized model without mutating global state. Returns the model or null on error.
+  function parseXmlToModel(xmlText){
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, 'text/xml');
+      if (doc.getElementsByTagName('parsererror').length){
+        console.warn('XML parse error in parseXmlToModel');
+        return null;
+      }
+      const model = normalizeModel(doc);
+      return model;
+    } catch (err){
+      console.warn('parseXmlToModel failed', err);
+      return null;
+    }
+  }
+
+  // Unify multiple normalized models into a single model. Each model may come from a different file.
+  // This function prefixes IDs to ensure uniqueness across files and merges arrays. It does not attempt
+  // to resolve cross-process links or adjust parentProcess values beyond prefixing IDs. Processes and
+  // containers retain their names and parentProcess references for clarity. Returns a merged model.
+  function unifyModels(models){
+    const result = { processes: [], activities: [], transitions: [], interfaces: [], variables: [], faults: [], hierarchy: [], containers: [] };
+    models = models || [];
+    models.forEach((m, idx)=>{
+      const prefix = `f${idx}_`;
+      // Processes
+      m.processes.forEach(p=>{
+        result.processes.push({ ...p, id: prefix + p.id });
+      });
+      // Activities
+      m.activities.forEach(a=>{
+        result.activities.push({ ...a, id: prefix + a.id });
+      });
+      // Containers
+      (m.containers||[]).forEach(c=>{
+        result.containers.push({ ...c, id: prefix + c.id });
+      });
+      // Transitions: prefix id, from, to to keep them unique; leave parentProcess as is
+      m.transitions.forEach(t=>{
+        result.transitions.push({ ...t, id: prefix + t.id, from: t.from ? prefix + t.from : t.from, to: t.to ? prefix + t.to : t.to });
+      });
+      // Interfaces, variables, faults
+      result.interfaces.push(...m.interfaces);
+      result.variables.push(...m.variables);
+      result.faults.push(...m.faults);
+      // Hierarchy: we keep as-is but wrap in a file-labeled root
+      if (m.hierarchy) result.hierarchy.push(...m.hierarchy);
+    });
+    return result;
+  }
+
+  /**
+   * Parse a file (.bwp, .xml, or .zip) into a model and integrate it into the current analysis.
+   * If append is true, the model is added to the existing analysisModels; otherwise the analysis
+   * is reset. After unifying models, the UI is re-rendered. Errors are shown in the file info area.
+   */
+  async function parseFile(file, append){
+    if (!file) return;
+    state.fileName = file.name;
+    // Display status
+    el('fileInfo').textContent = `${append ? 'Added' : 'Selected'}: ${file.name} (${Math.round(file.size/1024)} KB)`;
+    try {
+      const buf = await file.arrayBuffer();
+      let xmlText;
+      // Detect ZIP by magic header (PK\x03\x04)
+      const isZip = new Uint8Array(buf, 0, 4).every((b,i)=>[0x50,0x4b,0x03,0x04][i]===b);
+      if (isZip){
+        const zip = await JSZip.loadAsync(buf);
+        let candidate = null;
+        zip.forEach((path, zfile)=>{
+          const lower = path.toLowerCase();
+          if ((lower.endsWith('.bwp') || lower.endsWith('.xml')) && !lower.includes('schema')){
+            if (!candidate || path.length < candidate.length) candidate = path;
+          }
+        });
+        if (!candidate) throw new Error('No .bwp/.xml found inside ZIP');
+        xmlText = await zip.file(candidate).async('string');
+      } else {
+        xmlText = new TextDecoder().decode(buf);
+      }
+      const model = parseXmlToModel(xmlText);
+      if (!model) throw new Error('Failed to parse XML into a model');
+      if (!append) analysisModels = [];
+      analysisModels.push(model);
+      // unify all models
+      state.model = unifyModels(analysisModels);
+      renderAll();
+    } catch (err){
+      console.warn(err);
+      el('fileInfo').textContent = 'Error: ' + err.message;
+    }
+  }
+
   function uuid(prefix){ return `${prefix}_${Math.random().toString(36).slice(2,9)}`; }
 
   // --- Rendering ---
@@ -411,6 +582,10 @@
 
     // Generate narrative
     updateNarrative();
+
+    // Update metrics and best-practice panels
+    updateMetrics();
+    updateBestPractices();
   }
 
   function buildSummaryHtml(m){
@@ -510,14 +685,38 @@
     const showService = document.getElementById('optService')?.checked;
     const showVars    = document.getElementById('optVars')?.checked;
     const showConds   = document.getElementById('optConds')?.checked;
-    const src = mermaidFlowFromModel(m, { dir: dir, swimlanes: swim, linearize: lin, level: level, showService: showService, showVars: showVars, showConds: showConds });
+    const seqDisplay  = (document.getElementById('optSeqDisplay')?.value) || 'annotate';
+    const useColors   = !!document.getElementById('optColors')?.checked;
+    const useIcons    = !!document.getElementById('optIcons')?.checked;
+    const search      = (document.getElementById('searchFilter')?.value || '').trim();
+    const selectedArr = Array.from(selectedNodes || []);
+    const src = mermaidFlowFromModel(m, {
+      dir: dir,
+      swimlanes: swim,
+      linearize: lin,
+      level: level,
+      showService: showService,
+      showVars: showVars,
+      showConds: showConds,
+      seqDisplay: seqDisplay,
+      colors: useColors,
+      icons: useIcons,
+      search: search,
+      selected: selectedArr
+    });
     setMermaid(src);
     // regenerate narrative based on current options and level
     updateNarrative();
+    // Update metrics, best practices, and selected details after diagram is rebuilt
+    updateMetrics();
+    updateBestPractices();
+    updateDetails();
   }
   function buildSequenceDiagram(){
     const src = mermaidSequenceFromModel(state.model);
     setMermaid(src);
+    // clear selected details when showing sequence view
+    updateDetails();
   }
   el('btnFlow').onclick = buildFlowDiagram;
   el('btnSeq').onclick  = buildSequenceDiagram;
@@ -554,6 +753,16 @@
   document.getElementById('optService').onchange = buildFlowDiagram;
   document.getElementById('optVars').onchange = buildFlowDiagram;
   document.getElementById('optConds').onchange = buildFlowDiagram;
+
+  // New option handlers
+  document.getElementById('optColors').onchange = buildFlowDiagram;
+  document.getElementById('optIcons').onchange = buildFlowDiagram;
+  document.getElementById('optSeqDisplay').onchange = buildFlowDiagram;
+  // Search input: trigger on input to filter diagram
+  document.getElementById('searchFilter').oninput = () => {
+    // Do not reset selection when searching; just rebuild diagram with highlight
+    buildFlowDiagram();
+  };
 
   function setMermaid(source){
     // Update the displayed Mermaid source code
@@ -651,9 +860,40 @@
     const showService = opts.showService !== false;
     const showVars    = !!opts.showVars;
     const showConds   = opts.showConds !== false;
+    // Sequence display options: 'show', 'annotate', 'hide'
+    const seqDisplay = opts.seqDisplay || 'annotate';
+    // Node coloring and icon options
+    const useColors = !!opts.colors;
+    const useIcons  = !!opts.icons; // placeholder for future icon support
+    const searchTerm = (opts.search || '').toLowerCase();
+    const selectedIds = new Set(opts.selected || []);
     const lines = ["flowchart "+dir];
+    const classLines = [];
+    const assignLines = [];
     const nid = (name) => esc(name||'').replace(/[^a-zA-Z0-9_]/g,'_').slice(0,40) || uuid('N');
-
+    // Reset nodeMap for interactive lookup
+    nodeMap = {};
+    // Helper to count descendant activities for sequence containers
+    const seqCountCache = new Map();
+    function countDescActivities(containerRaw){
+      if (!containerRaw) return 0;
+      if (seqCountCache.has(containerRaw)) return seqCountCache.get(containerRaw);
+      let count = 0;
+      const q = [containerRaw];
+      while(q.length){
+        const n = q.pop();
+        for (const ch of Array.from(n.children||[])){
+          const ln = (ch.localName||'').toLowerCase();
+          if (/activity$/.test(ln) || ch.getAttribute?.('type') || ch.getAttribute?.('activityType') || /receive|reply|invoke|assign|throw|rethrow|wait|empty|pick|onmessage|onalarm/.test(ln)){
+            count++;
+          }
+          // include nested containers
+          q.push(ch);
+        }
+      }
+      seqCountCache.set(containerRaw, count);
+      return count;
+    }
     // Group activities and containers by process
     const byProcActs = new Map();
     for (const a of m.activities){
@@ -667,64 +907,125 @@
       if (!byProcCnt.has(p)) byProcCnt.set(p, []);
       byProcCnt.get(p).push(c);
     }
-
+    // Predefine class definitions if coloring enabled or highlight/selected used
+    const classDefs = {
+      svc:   'fill:#3b6cff,stroke:#3b6cff,color:#ffffff',
+      transf:'fill:#40d19a,stroke:#40d19a,color:#001c17',
+      dec:   'fill:#ffd166,stroke:#ffd166,color:#352b00',
+      err:   'fill:#ff6b6b,stroke:#ff6b6b,color:#330000',
+      loop:  'fill:#a084ca,stroke:#a084ca,color:#26003d',
+      tim:   'fill:#9e4770,stroke:#9e4770,color:#330018',
+      oth:   'fill:#5b6988,stroke:#5b6988,color:#ffffff',
+      highlight: 'stroke:#ffd166,stroke-width:4px',
+      selected:  'stroke:#ffffff,stroke-width:4px'
+    };
+    const categoryClassMap = {
+      service:'svc',
+      transformation:'transf',
+      decision:'dec',
+      error:'err',
+      loop:'loop',
+      timer:'tim',
+      other:'oth'
+    };
+    // Build diagrams per process
     for (const proc of new Set([...(byProcActs.keys()), ...(byProcCnt.keys())])) {
       const procId = nid(`cluster_${proc}`);
       const acts = byProcActs.get(proc) || [];
       const cnts = byProcCnt.get(proc) || [];
-
       const items = [];
       if (level === 0) {
-        // Only process itself
-        items.push({ id: nid(`${proc}_PROC`), label: esc(proc), type:'process', raw:null });
+        items.push({ id: nid(`${proc}_PROC`), label: esc(proc), type:'process', raw:null, cat:'other' });
       } else if (level === 1) {
-        // Containers only
         if (cnts.length){
-          for (const c of cnts){ if (c.depth === 0) items.push({ id: nid(`${proc}_${c.id}`), label: `${c.name}\n<small>${c.type}</small>`, type:'container', raw:c.raw }); }
+          for (const c of cnts){ if (c.depth === 0) {
+              // handle sequence display
+              if (c.type === 'sequence' && seqDisplay === 'hide') continue;
+              let label = `${c.name}\n<small>${c.type}</small>`;
+              if (c.type === 'sequence' && seqDisplay === 'annotate'){
+                const steps = countDescActivities(c.raw);
+                label = `${c.name} (${steps})\n<small>${c.type}</small>`;
+              }
+              items.push({ id: nid(`${proc}_${c.id}`), label: label, type:'container', raw:c.raw, cat:'other', originalType: c.type });
+          } }
         } else {
-          items.push({ id: nid(`${proc}_PROC`), label: esc(proc), type:'process', raw:null });
+          items.push({ id: nid(`${proc}_PROC`), label: esc(proc), type:'process', raw:null, cat:'other' });
         }
       } else if (level === 2) {
-        // Containers + first-level activities (containerDepth==0)
-        for (const c of cnts){ if (c.depth === 0) items.push({ id: nid(`${proc}_${c.id}`), label: `${c.name}\n<small>${c.type}</small>`, type:'container', raw:c.raw }); }
-        for (const a of acts){ if ((a.containerDepth || 0) === 0) items.push({ id: nid(`${proc}_${a.id}`), label: `${a.name}\n<small>${a.type}</small>`, type:'activity', raw:a.raw }); }
+        for (const c of cnts){ if (c.depth === 0) {
+            if (c.type === 'sequence' && seqDisplay === 'hide') {
+              // skip
+            } else {
+              let label = `${c.name}\n<small>${c.type}</small>`;
+              if (c.type === 'sequence' && seqDisplay === 'annotate'){
+                const steps = countDescActivities(c.raw);
+                label = `${c.name} (${steps})\n<small>${c.type}</small>`;
+              }
+              items.push({ id: nid(`${proc}_${c.id}`), label: label, type:'container', raw:c.raw, cat:'other', originalType: c.type });
+            }
+        } }
+        for (const a of acts){ if ((a.containerDepth || 0) === 0) {
+            items.push({ id: nid(`${proc}_${a.id}`), label: `${a.name}\n<small>${a.type}</small>`, type:'activity', raw:a.raw, cat: categorizeType(a.type) });
+        } }
       } else {
-        // All activities
-        for (const a of acts){ items.push({ id: nid(`${proc}_${a.id}`), label: `${a.name}\n<small>${a.type}</small>`, type:'activity', raw:a.raw }); }
+        for (const a of acts){
+          items.push({ id: nid(`${proc}_${a.id}`), label: `${a.name}\n<small>${a.type}</small>`, type:'activity', raw:a.raw, cat: categorizeType(a.type) });
+        }
       }
-
-      // Draw subgraph for process swimlane
+      // Start process subgraph if swimlanes
       if (swim) lines.push(`subgraph ${procId}[${esc(proc)}]`);
-
+      // Render items
       for (const it of items){
+        // NodeMap mapping for interactive details
+        nodeMap[it.id] = it;
         // Build node label with optional service and variable info
         let lbl = `${it.label}`;
         if (it.raw && (showService || showVars)){
-          const a = it.raw; // DOM node
-          // partner/operation info
+          const a = it.raw;
           const pl = a.getAttribute && (a.getAttribute('partnerLink') || a.getAttribute('partnerlink') || '');
           const op = a.getAttribute && a.getAttribute('operation');
           const inV = a.getAttribute && (a.getAttribute('inputVariable') || a.getAttribute('inputvariable') || a.getAttribute('variable'));
           const outV= a.getAttribute && (a.getAttribute('outputVariable') || a.getAttribute('outputvariable'));
           const extras = [];
           if (showService && (pl || op)){
-            const svc = `${pl || ''}${pl && op ? ' ' : ''}${op || ''}`.trim();
-            if (svc) extras.push(svc);
+            const svc = `${pl || ''}${pl && op ? ' ' : ''}${op || ''}`.trim(); if (svc) extras.push(svc);
           }
           if (showVars && (inV || outV)){
-            const vline = `${inV || ''}${(inV && outV) ? '→' : ''}${outV || ''}`.trim();
-            if (vline) extras.push(vline);
+            const vline = `${inV || ''}${(inV && outV) ? '→' : ''}${outV || ''}`.trim(); if (vline) extras.push(vline);
           }
-          if (extras.length){ lbl = `${it.label.split('\n')[0]}\n${extras.join('\n')}\n<small>${it.label.split('\n').pop().replace(/<small>|<\/small>/g,'')}</small>`; }
+          if (extras.length){
+            const parts = it.label.split('\n');
+            const last = parts.pop();
+            lbl = `${parts[0]}\n${extras.join('\n')}\n${last}`;
+          }
         }
-        lines.push(`${it.id}[\"${lbl}\"]`);
+        // Compose node definition
+        lines.push(`${it.id}["${lbl}"]`);
+        // Click directive for interactive step-through
+        lines.push(`click ${it.id} mermaidNodeClick`);
+        // Assign classes for categories
+        const catKey = categoryClassMap[it.cat] || 'oth';
+        if (useColors){ assignLines.push(`class ${it.id} ${catKey}`); }
+        // Search highlight
+        if (searchTerm){
+          const n = (it.raw?.getAttribute && (it.raw.getAttribute('name') || it.raw.getAttribute('label')) || it.label || '').toLowerCase();
+          const t = (it.raw?.getAttribute && (it.raw.getAttribute('type') || it.raw.getAttribute('activityType')) || it.type || '').toLowerCase();
+          const pl = it.raw?.getAttribute && (it.raw.getAttribute('partnerLink') || it.raw.getAttribute('partnerlink')) || '';
+          const op2 = it.raw?.getAttribute && it.raw.getAttribute('operation') || '';
+          const combined = `${n} ${t} ${pl} ${op2}`;
+          if (combined.includes(searchTerm)){
+            assignLines.push(`class ${it.id} highlight`);
+          }
+        }
+        // Selected nodes class
+        if (selectedIds.has(it.id)){
+          assignLines.push(`class ${it.id} selected`);
+        }
       }
-
       if (swim) lines.push('end');
-
       // Edges
       if (level < 3 || linearize) {
-        // link items in document order
+        // Document-order edges
         const ordered = items.slice().sort((a,b) => {
           if (a.raw && b.raw && a.raw.compareDocumentPosition) {
             const cmp = a.raw.compareDocumentPosition(b.raw);
@@ -733,7 +1034,7 @@
           }
           return 0;
         });
-        for (let i = 0; i < ordered.length - 1; i++){
+        for (let i=0; i<ordered.length-1; i++){
           lines.push(`${ordered[i].id} --> ${ordered[i+1].id}`);
         }
       } else {
@@ -746,9 +1047,16 @@
         }
       }
     }
-
-    if (lines.length <= 1){ lines.push('A[Start]-->B[No transitions detected];'); }
-    return lines.join('\n');
+    // Append class definitions and assignments if needed
+    if (useColors || searchTerm || selectedIds.size){
+      // class definitions
+      for (const key in classDefs){
+        classLines.push(`classDef ${key} ${classDefs[key]}`);
+      }
+    }
+    const output = lines.concat(classLines, assignLines);
+    if (output.length <= 1){ output.push('A[Start]-->B[No transitions detected];'); }
+    return output.join('\n');
   };
 
   function mermaidSequenceFromModel(m){
@@ -785,6 +1093,11 @@
   // --- Exporters ---
   el('btnExportMD').onclick = ()=> exportMarkdown();
   el('btnExportHTML').onclick = ()=> exportHtml();
+
+  // Additional buttons: Data Flow, Export PNG, Export PDF
+  document.getElementById('btnDataFlow').onclick = buildDataFlowDiagram;
+  document.getElementById('btnExportPNG').onclick = exportPNG;
+  document.getElementById('btnExportPDF').onclick = exportPDF;
 
   function exportMarkdown(){
     const m = state.model; if (!m) return;
@@ -870,6 +1183,146 @@
     return Array.from(m.entries());
   }
 
+  // --- Complexity metrics and best-practice checks ---
+  /**
+   * Update the complexity metrics panel. Computes counts of activity categories, number of parallel
+   * branches, and maximum nesting depth from the current unified model. Displays the results in
+   * the #metrics element.
+   */
+  function updateMetrics(){
+    const m = state.model;
+    const metricsDiv = document.getElementById('metrics');
+    if (!metricsDiv){ return; }
+    if (!m){ metricsDiv.innerHTML = '<p class="fine">No data.</p>'; return; }
+    // Count categories of activities
+    const counts = { service:0, transformation:0, decision:0, error:0, loop:0, timer:0, other:0 };
+    let maxDepth = 0;
+    (m.containers||[]).forEach(c=>{ if (c.depth>maxDepth) maxDepth = c.depth; });
+    for (const a of m.activities){
+      const cat = categorizeType(a.type);
+      if (counts.hasOwnProperty(cat)) counts[cat]++; else counts.other++;
+    }
+    // Parallel branches: count number of extra branches in flow containers
+    let parallel = 0;
+    (m.containers||[]).forEach(c=>{
+      if (c.type==='flow' && c.raw && c.raw.children){ const n = Array.from(c.raw.children).filter(ch=> ch.nodeType===1).length; if (n>1) parallel += (n - 1); }
+    });
+    const html = `<ul>`+
+      `<li>Service calls: ${counts.service}</li>`+
+      `<li>Transformations: ${counts.transformation}</li>`+
+      `<li>Decisions: ${counts.decision}</li>`+
+      `<li>Error/throws: ${counts.error}</li>`+
+      `<li>Loops/timers: ${counts.loop + counts.timer}</li>`+
+      `<li>Parallel branches: ${parallel}</li>`+
+      `<li>Max depth of nested scopes: ${maxDepth}</li>`+
+      `</ul>`;
+    metricsDiv.innerHTML = html;
+  }
+
+  /**
+   * Check for simple best-practice violations and display warnings in #bestPractices.
+   * Heuristics include missing fault handlers, deep nesting, and possible hard-coded credentials.
+   */
+  function updateBestPractices(){
+    const m = state.model;
+    const bpDiv = document.getElementById('bestPractices');
+    if (!bpDiv){ return; }
+    if (!m){ bpDiv.innerHTML = '<p class="fine">No data.</p>'; return; }
+    const warnings = [];
+    // 1. No fault handlers
+    if (!m.faults || m.faults.length===0) warnings.push('No fault or error handlers detected.');
+    // 2. Deep nesting
+    let maxDepth = 0;
+    (m.containers||[]).forEach(c=>{ if (c.depth>maxDepth) maxDepth = c.depth; });
+    if (maxDepth >= 4) warnings.push(`Processes have deep nesting (depth ${maxDepth}). Consider refactoring.`);
+    // 3. Hard-coded credentials in attribute names or values
+    const credRegex = /password|secret|token|credential/i;
+    for (const a of m.activities){
+      const attrs = a.attrs || {};
+      for (const k in attrs){
+        const val = String(attrs[k]);
+        if (credRegex.test(k) || credRegex.test(val)){
+          warnings.push(`Possible credential exposure in activity <b>${esc(a.name)}</b> (${esc(k)}="${esc(val)}").`);
+        }
+      }
+    }
+    if (!warnings.length) warnings.push('No issues detected.');
+    bpDiv.innerHTML = '<ul>'+warnings.map(w=>'<li>'+w+'</li>').join('')+'</ul>';
+  }
+
+  // Helper to categorize activity types into coarse categories for coloring and metrics
+  function categorizeType(t){
+    const lt = (t||'').toLowerCase();
+    if (/receive|reply|invoke/.test(lt)) return 'service';
+    if (/assign|map|transform/.test(lt)) return 'transformation';
+    if (/if|switch|choice|pick/.test(lt)) return 'decision';
+    if (/throw|fault|rethrow|catch|error|onerror/.test(lt)) return 'error';
+    if (/while|repeatuntil|foreach|loop/.test(lt)) return 'loop';
+    if (/wait|alarm|sleep|timer/.test(lt)) return 'timer';
+    return 'other';
+  }
+
+  // --- Data Flow Diagram builder ---
+  function buildDataFlowDiagram(){
+    const m = state.model;
+    if (!m){ return; }
+    const lines = ['flowchart TD'];
+    const nid = (name)=> esc(name||'').replace(/[^a-zA-Z0-9_]/g,'_').slice(0,40) || uuid('N');
+    // Collect variable names from inputVar and outputVar across activities
+    const varSet = new Set();
+    for (const a of m.activities){
+      if (a.inputVar) varSet.add(a.inputVar);
+      if (a.outputVar) varSet.add(a.outputVar);
+    }
+    const varIds = {};
+    varSet.forEach(v=>{
+      varIds[v] = nid('var_'+v);
+      lines.push(`${varIds[v]}(( ${esc(v)} ))`);
+    });
+    // Activity nodes
+    const actIds = {};
+    m.activities.forEach(a=>{
+      actIds[a.id] = nid('act_'+a.id);
+      lines.push(`${actIds[a.id]}[${esc(a.name)}]`);
+    });
+    // Edges from variables to activities (input) and activities to variables (output)
+    m.activities.forEach(a=>{
+      const aId = actIds[a.id];
+      if (a.inputVar && varIds[a.inputVar]) lines.push(`${varIds[a.inputVar]} --> ${aId}`);
+      if (a.outputVar && varIds[a.outputVar]) lines.push(`${aId} --> ${varIds[a.outputVar]}`);
+    });
+    if (lines.length === 1) lines.push('A[No variables detected]');
+    const src = lines.join('\n');
+    setMermaid(src);
+    // Data flow diagrams don't need narrative; update narrative pane accordingly
+    const nar = document.getElementById('narrative');
+    if (nar) nar.innerText = 'Data flow diagram shown.';
+  }
+
+  // --- Export to PNG and PDF using dom-to-image and jsPDF ---
+  async function exportPNG(){
+    const node = document.getElementById('mermaid');
+    if (!node || !window.domtoimage){ console.warn('dom-to-image library not loaded'); return; }
+    try {
+      const blob = await domtoimage.toBlob(node);
+      saveAs(blob, (state.fileName || 'diagram') + '.png');
+    } catch (err){ console.warn('PNG export failed', err); }
+  }
+  async function exportPDF(){
+    const node = document.getElementById('mermaid');
+    if (!node || !window.domtoimage || !window.jspdf){ console.warn('dom-to-image or jsPDF not loaded'); return; }
+    try {
+      const dataUrl = await domtoimage.toPng(node);
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation: 'landscape' });
+      const img = pdf.getImageProperties(dataUrl);
+      const pdfWidth  = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (img.height * pdfWidth) / img.width;
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save((state.fileName || 'diagram') + '.pdf');
+    } catch (err){ console.warn('PDF export failed', err); }
+  }
+
   // --- Narrative generation ---
   // Build a simple natural-language narrative describing the workflow at the current level
   function generateNarrative(m, opts = {}){
@@ -947,6 +1400,53 @@
     const narrative = generateNarrative(state.model, {showService: showService, showVars: showVars});
     const container = document.getElementById('narrative');
     if (container) container.innerText = narrative;
+  }
+
+  // --- Interactive selection and details ---
+  // Called by Mermaid when a node is clicked. Toggles selection of the node and updates the diagram and details panel.
+  window.mermaidNodeClick = function(id){
+    if (!id) return;
+    if (selectedNodes.has(id)) selectedNodes.delete(id); else selectedNodes.add(id);
+    buildFlowDiagram();
+    updateDetails();
+  };
+
+  // Update the details panel (#details) with information about selected nodes
+  function updateDetails(){
+    const detailsDiv = document.getElementById('details');
+    if (!detailsDiv) return;
+    if (!selectedNodes || selectedNodes.size === 0){ detailsDiv.innerHTML = '<p class="fine">No activities selected.</p>'; return; }
+    const html = [];
+    selectedNodes.forEach(id=>{
+      const it = nodeMap[id];
+      if (!it) return;
+      const raw = it.raw;
+      const name = raw?.getAttribute && (raw.getAttribute('name') || raw.getAttribute('label')) || it.label || id;
+      const type = it.originalType || it.type;
+      html.push('<div style="margin-bottom:10px">');
+      html.push('<h4 style="margin:0 0 4px 0">'+esc(name)+'</h4>');
+      html.push('<p class="fine"><b>Type:</b> '+esc(type)+'</p>');
+      if (raw){
+        const pl = raw.getAttribute && (raw.getAttribute('partnerLink') || raw.getAttribute('partnerlink') || '');
+        const op = raw.getAttribute && raw.getAttribute('operation');
+        const inV = raw.getAttribute && (raw.getAttribute('inputVariable') || raw.getAttribute('inputvariable') || raw.getAttribute('variable'));
+        const outV = raw.getAttribute && (raw.getAttribute('outputVariable') || raw.getAttribute('outputvariable'));
+        if (pl || op) html.push('<p class="fine"><b>Service:</b> '+esc(`${pl}${pl && op ? ' ' : ''}${op}`.trim())+'</p>');
+        if (inV || outV) html.push('<p class="fine"><b>Variables:</b> '+esc(`${inV || ''}${(inV && outV) ? '→' : ''}${outV || ''}`.trim())+'</p>');
+        const attrs = [];
+        if (raw.attributes){
+          for (const attr of Array.from(raw.attributes)){
+            const k = attr.name; const v = attr.value;
+            if (!['name','label','id','partnerLink','partnerlink','operation','inputVariable','inputvariable','variable','outputVariable','outputvariable'].includes(k)){
+              attrs.push(`${k}="${esc(v)}"`);
+            }
+          }
+        }
+        if (attrs.length) html.push('<p class="fine"><b>Attributes:</b> '+attrs.join(' ')+'</p>');
+      }
+      html.push('</div>');
+    });
+    detailsDiv.innerHTML = html.join('');
   }
 </script>
 </body>
