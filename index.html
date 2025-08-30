@@ -227,7 +227,13 @@
   // does not break the rest of the application. We disable automatic startOnLoad
   // because we manually invoke mermaid.run() when diagrams are rendered.
   try {
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'dark' });
+    mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'loose',
+    maxTextSize: 100000,      // allow bigger diagrams (adjust as needed)
+    theme: 'default',
+    flowchart: { useMaxWidth: true, htmlLabels: true }
+  });
   } catch (e) {
     console.warn('Mermaid initialization failed', e);
   }
